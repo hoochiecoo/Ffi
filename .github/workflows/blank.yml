@@ -37,70 +37,62 @@ jobs:
       # --- ШАГ 1: Превращаем C-файл в CPP и добавляем вызов OpenCV ---
       - name: Convert to C++ and Call OpenCV
         run: |
-          # 1. Переименовываем исходник .c -> .cpp
+          # Путь к исходникам в шаблоне plugin_ffi лежит в src/
           mv opencv_native/src/opencv_native.c opencv_native/src/opencv_native.cpp
           
-          # 2. Переписываем файл, добавляя реальный вызов OpenCV
-          # Это заставит линковщик включить библиотеку в сборку.
           cat <<EOF > opencv_native/src/opencv_native.cpp
           #include <stdint.h>
-          #include <opencv2/core.hpp> // Подключаем хедер OpenCV
+          #include <opencv2/core.hpp> 
 
-          // Макрос для экспорта символов
           #if defined(_WIN32)
           #define DART_EXPORT __declspec(dllexport)
           #else
           #define DART_EXPORT __attribute__((visibility("default"))) __attribute__((used))
           #endif
 
-          // Простая функция суммы (из шаблона)
           extern "C" DART_EXPORT intptr_t sum(intptr_t a, intptr_t b) {
               return a + b;
           }
 
-          // НОВАЯ ФУНКЦИЯ: Возвращает версию OpenCV (доказывает, что либа подключена)
           extern "C" DART_EXPORT intptr_t get_opencv_version_major() {
-              // Реальный вызов функции из OpenCV SDK
               return CV_MAJOR_VERSION;
           }
           EOF
 
-      # --- ШАГ 2: Настраиваем CMake (подключаем C++ и OpenCV) ---
+      # --- ШАГ 2: Настраиваем CMake (ИСПРАВЛЕННЫЙ ПУТЬ) ---
       - name: Configure CMakeLists.txt
         run: |
-          CMAKE_FILE="opencv_native/android/src/main/CMakeLists.txt"
+          # ИСПРАВЛЕНИЕ: CMakeLists.txt находится в src/, а не в android/...
+          CMAKE_FILE="opencv_native/src/CMakeLists.txt"
           
-          # 1. Меняем в CMake ссылку с .c на .cpp файл
+          echo "Configuring $CMAKE_FILE..."
+          
+          # 1. Меняем .c на .cpp внутри CMake
           sed -i 's/opencv_native.c/opencv_native.cpp/g' $CMAKE_FILE
           
-          # 2. Добавляем конфигурацию OpenCV
+          # 2. Добавляем конфиг OpenCV. 
+          # Оборачиваем в if(ANDROID), чтобы не ломать сборку под iOS/Windows, если вдруг захотите добавить.
           cat <<EOF >> $CMAKE_FILE
           
-          # --- OpenCV Configuration ---
-          set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
-          find_package(OpenCV REQUIRED)
-          
-          # Добавляем лог, чтобы видеть в консоли сборки
-          message(STATUS "OpenCV found: \${OpenCV_LIBS}")
-
-          target_link_libraries(opencv_native \${OpenCV_LIBS})
+          if (ANDROID)
+              set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
+              find_package(OpenCV REQUIRED)
+              message(STATUS "OpenCV Libraries: \${OpenCV_LIBS}")
+              target_link_libraries(opencv_native \${OpenCV_LIBS})
+          endif()
           EOF
           
           cat $CMAKE_FILE
 
-      # --- ШАГ 3: Настраиваем Gradle (чтобы упаковать .so файлы в APK) ---
+      # --- ШАГ 3: Настраиваем Gradle (чтобы упаковать .so файлы) ---
       - name: Configure build.gradle for jniLibs
         run: |
           GRADLE_FILE="opencv_native/android/build.gradle"
           
-          # Нам нужно добавить sourceSets, чтобы Gradle знал, где брать .so файлы OpenCV
-          # Вставляем это в конец блока android { ... }
-          
-          # Читаем файл и вставляем нужные строки перед последней закрывающей скобкой
-          # Это немного "грязный" хак через sed, но рабочий для CI
-          
+          # Добавляем флаги C++
           sed -i '/defaultConfig {/a \        externalNativeBuild {\n            cmake {\n                cppFlags "-std=c++11 -frtti -fexceptions"\n                arguments "-DANDROID_STL=c++_shared"\n            }\n        }' $GRADLE_FILE
           
+          # Указываем путь к jniLibs
           echo "
           android {
               sourceSets {
@@ -111,7 +103,6 @@ jobs:
           }
           " >> $GRADLE_FILE
           
-          echo "Modified build.gradle:"
           cat $GRADLE_FILE
 
       - name: Build example APK
@@ -124,8 +115,6 @@ jobs:
         run: |
           APK_PATH="opencv_native/example/build/app/outputs/flutter-apk/app-release.apk"
           ls -lh $APK_PATH
-          
-          # Проверяем наличие библиотеки libopencv_java4.so внутри APK
           unzip -l $APK_PATH | grep "libopencv_java4.so" || echo "WARNING: OpenCV lib not found in APK!"
 
       - name: Upload APK artifact
