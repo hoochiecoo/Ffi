@@ -22,12 +22,52 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      # --- НОВЫЙ ШАГ: Скачивание OpenCV ---
+      - name: Download and Setup OpenCV Android SDK
+        run: |
+          echo "Downloading OpenCV 4.12.0..."
+          wget -q https://github.com/opencv/opencv/releases/download/4.12.0/opencv-4.12.0-android-sdk.zip
+          
+          echo "Unzipping..."
+          unzip -q opencv-4.12.0-android-sdk.zip
+          
+          # Переименовываем папку для удобства (стандартно она называется OpenCV-android-sdk)
+          mv OpenCV-android-sdk opencv-sdk
+          
+          # Сохраняем путь к SDK в переменную окружения для следующих шагов
+          echo "OPENCV_ANDROID_SDK=$PWD/opencv-sdk" >> $GITHUB_ENV
+
       - name: Create FFI plugin
         run: |
           flutter create \
             --template=plugin_ffi \
             --platforms=android,ios \
             opencv_native
+
+      # --- НОВЫЙ ШАГ: Подключение OpenCV к CMake ---
+      - name: Inject OpenCV into CMakeLists.txt
+        run: |
+          CMAKE_FILE="opencv_native/android/src/main/CMakeLists.txt"
+          
+          echo "Modifying $CMAKE_FILE..."
+          
+          # 1. Указываем путь к OpenCV (используем переменную из предыдущего шага)
+          # 2. Ищем пакет OpenCV
+          # 3. Линкуем библиотеки OpenCV к библиотеке плагина (opencv_native)
+          
+          cat <<EOF >> $CMAKE_FILE
+          
+          # --- Auto-injected OpenCV Config ---
+          set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
+          find_package(OpenCV REQUIRED)
+          
+          # Важно: target_link_libraries должен применяться к цели, созданной во flutter create.
+          # По умолчанию имя библиотеки совпадает с именем проекта: opencv_native
+          target_link_libraries(opencv_native \${OpenCV_LIBS})
+          EOF
+          
+          # Выводим содержимое файла для отладки (чтобы убедиться в логах, что все ок)
+          cat $CMAKE_FILE
 
       - name: Build example APK
         run: |
