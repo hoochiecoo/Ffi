@@ -1,0 +1,32 @@
+name: Flutter Plugin FFI Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  create-plugin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: stable
+
+      - name: Install dependencies
+        run: flutter doctor
+
+      - name: Create FFI plugin
+        run: |
+          flutter create --template=plugin_ffi --platforms=android,ios opencv_native
+
+      - name: Show project structure
+        run: |
+          sudo apt-get install tree -y
+          tree opencv_native -L 3
