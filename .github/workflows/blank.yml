@@ -38,7 +38,6 @@ jobs:
         run: |
           mv opencv_native/src/opencv_native.c opencv_native/src/opencv_native.cpp
           
-          # Добавляем функцию get_opencv_version_major
           cat <<EOF > opencv_native/src/opencv_native.cpp
           #include <stdint.h>
           #include <opencv2/core.hpp> 
@@ -53,8 +52,11 @@ jobs:
               return a + b;
           }
 
+          // Изменили функцию: теперь она создает матрицу.
+          // Это заставляет линковщик подключить библиотеку, так как конструктор cv::Mat находится внутри .so файла.
           extern "C" DART_EXPORT intptr_t get_opencv_version_major() {
-              return CV_MAJOR_VERSION;
+              cv::Mat mat(10, 10, CV_8UC1); // Выделение памяти под картинку 10x10
+              return mat.rows;              // Вернет 10
           }
           EOF
 
