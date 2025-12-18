@@ -2,31 +2,54 @@ name: Flutter Plugin FFI Build
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
 
 jobs:
-  create-plugin:
+  build-plugin-example:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2. Setup Flutter
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-           channel:  stable
+          channel: stable
+          cache: true
 
-      - name: Install dependencies
-        run: flutter doctor
+      # 3. Flutter info
+      - name: Flutter doctor
+        run: flutter doctor -v
 
+      # 4. Create FFI plugin
       - name: Create FFI plugin
         run: |
-          flutter create --template=plugin_ffi --platforms=android,ios opencv_native
+          flutter create \
+            --template=plugin_ffi \
+            --platforms=android,ios \
+            opencv_native
 
+      # 5. Show structure (debug)
       - name: Show project structure
         run: |
+          sudo apt-get update
           sudo apt-get install tree -y
-          tree opencv_native -L 3
+          tree opencv_native -L 4
+
+      # 6. Build example APK
+      - name: Build example APK
+        run: |
+          cd opencv_native/example
+          flutter pub get
+          flutter build apk --release
+
+      # 7. Upload APK artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: opencv_native-example-apk
+          path: opencv_native/example/build/app/outputs/flutter-apk/app-release.apk
