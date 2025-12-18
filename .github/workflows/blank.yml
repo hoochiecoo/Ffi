@@ -37,7 +37,6 @@ jobs:
       # --- ШАГ 1: Превращаем C-файл в CPP и добавляем вызов OpenCV ---
       - name: Convert to C++ and Call OpenCV
         run: |
-          # Путь к исходникам в шаблоне plugin_ffi лежит в src/
           mv opencv_native/src/opencv_native.c opencv_native/src/opencv_native.cpp
           
           cat <<EOF > opencv_native/src/opencv_native.cpp
@@ -59,19 +58,20 @@ jobs:
           }
           EOF
 
-      # --- ШАГ 2: Настраиваем CMake (ИСПРАВЛЕННЫЙ ПУТЬ) ---
+      # --- ШАГ 2: Настраиваем CMake (ИСПРАВЛЕНИЕ ЯЗЫКА) ---
       - name: Configure CMakeLists.txt
         run: |
-          # ИСПРАВЛЕНИЕ: CMakeLists.txt находится в src/, а не в android/...
           CMAKE_FILE="opencv_native/src/CMakeLists.txt"
           
           echo "Configuring $CMAKE_FILE..."
           
-          # 1. Меняем .c на .cpp внутри CMake
+          # 1. Меняем .c на .cpp в списке файлов
           sed -i 's/opencv_native.c/opencv_native.cpp/g' $CMAKE_FILE
           
-          # 2. Добавляем конфиг OpenCV. 
-          # Оборачиваем в if(ANDROID), чтобы не ломать сборку под iOS/Windows, если вдруг захотите добавить.
+          # 2. ВАЖНОЕ ИСПРАВЛЕНИЕ: Включаем поддержку C++ (LANGUAGES C -> LANGUAGES CXX)
+          sed -i 's/LANGUAGES C/LANGUAGES CXX/g' $CMAKE_FILE
+          
+          # 3. Добавляем конфиг OpenCV
           cat <<EOF >> $CMAKE_FILE
           
           if (ANDROID)
@@ -82,9 +82,10 @@ jobs:
           endif()
           EOF
           
+          # Проверяем содержимое файла
           cat $CMAKE_FILE
 
-      # --- ШАГ 3: Настраиваем Gradle (чтобы упаковать .so файлы) ---
+      # --- ШАГ 3: Настраиваем Gradle ---
       - name: Configure build.gradle for jniLibs
         run: |
           GRADLE_FILE="opencv_native/android/build.gradle"
@@ -102,8 +103,6 @@ jobs:
               }
           }
           " >> $GRADLE_FILE
-          
-          cat $GRADLE_FILE
 
       - name: Build example APK
         run: |
