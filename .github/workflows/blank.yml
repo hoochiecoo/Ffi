@@ -63,16 +63,32 @@ jobs:
       - name: Configure CMakeLists.txt
         run: |
           CMAKE_FILE="opencv_native/src/CMakeLists.txt"
+          
+          # 1. Меняем .c на .cpp и включаем C++
           sed -i 's/opencv_native.c/opencv_native.cpp/g' $CMAKE_FILE
           sed -i 's/LANGUAGES C/LANGUAGES CXX/g' $CMAKE_FILE
           
+          # 2. Пишем конфиг, который ИГНОРИРУЕТ статику и берет .so файл
           cat <<EOF >> $CMAKE_FILE
+          
           if (ANDROID)
+              # Подключаем хидеры (заголовки), чтобы код компилировался
               set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
               find_package(OpenCV REQUIRED)
-              target_link_libraries(opencv_native \${OpenCV_LIBS})
+              
+              # ВАЖНО: Создаем "импортированную" библиотеку, указывая путь к .so файлу
+              add_library(libopencv_java4 SHARED IMPORTED)
+              set_target_properties(libopencv_java4 PROPERTIES IMPORTED_LOCATION
+                  "${OPENCV_ANDROID_SDK}/sdk/native/libs/\${ANDROID_ABI}/libopencv_java4.so")
+              
+              # Линкуем наш плагин ИМЕННО с этой динамической библиотекой
+              target_link_libraries(opencv_native libopencv_java4)
+              
+              message(STATUS "Forcing link against: ${OPENCV_ANDROID_SDK}/sdk/native/libs/\${ANDROID_ABI}/libopencv_java4.so")
           endif()
           EOF
+          
+          cat $CMAKE_FILE
 
       - name: Configure build.gradle for jniLibs
         run: |
