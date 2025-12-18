@@ -34,10 +34,8 @@ jobs:
             --platforms=android,ios \
             opencv_native
 
-      # --- ШАГ 1: Превращаем C-файл в CPP и добавляем вызов OpenCV ---
       - name: Convert to C++ and Call OpenCV
         run: |
-          # Путь к исходникам в шаблоне plugin_ffi лежит в src/
           mv opencv_native/src/opencv_native.c opencv_native/src/opencv_native.cpp
           
           cat <<EOF > opencv_native/src/opencv_native.cpp
@@ -55,44 +53,47 @@ jobs:
           }
 
           extern "C" DART_EXPORT intptr_t get_opencv_version_major() {
-              return CV_MAJOR_VERSION;
+              // Реальный вызов конструктора матрицы
+              cv::Mat mat(10, 10, CV_8UC1);
+              return mat.rows;
           }
           EOF
 
-      # --- ШАГ 2: Настраиваем CMake (ИСПРАВЛЕННЫЙ ПУТЬ) ---
       - name: Configure CMakeLists.txt
         run: |
-          # ИСПРАВЛЕНИЕ: CMakeLists.txt находится в src/, а не в android/...
           CMAKE_FILE="opencv_native/src/CMakeLists.txt"
           
-          echo "Configuring $CMAKE_FILE..."
-          
-          # 1. Меняем .c на .cpp внутри CMake
+          # Переключаем язык на C++
           sed -i 's/opencv_native.c/opencv_native.cpp/g' $CMAKE_FILE
+          sed -i 's/LANGUAGES C/LANGUAGES CXX/g' $CMAKE_FILE
           
-          # 2. Добавляем конфиг OpenCV. 
-          # Оборачиваем в if(ANDROID), чтобы не ломать сборку под iOS/Windows, если вдруг захотите добавить.
           cat <<EOF >> $CMAKE_FILE
           
           if (ANDROID)
               set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
               find_package(OpenCV REQUIRED)
-              message(STATUS "OpenCV Libraries: \${OpenCV_LIBS}")
-              target_link_libraries(opencv_native \${OpenCV_LIBS})
+              
+              # 1. Include paths (Fixes 'fatal error: core.hpp not found')
+              target_include_directories(opencv_native PRIVATE 
+                  "$OPENCV_ANDROID_SDK/sdk/native/jni/include")
+              
+              # 2. Force Shared Linking (Fixes APK size / static linking issues)
+              add_library(libopencv_java4 SHARED IMPORTED)
+              set_target_properties(libopencv_java4 PROPERTIES IMPORTED_LOCATION
+                  "${OPENCV_ANDROID_SDK}/sdk/native/libs/\${ANDROID_ABI}/libopencv_java4.so")
+              
+              target_link_libraries(opencv_native libopencv_java4)
           endif()
           EOF
-          
-          cat $CMAKE_FILE
 
-      # --- ШАГ 3: Настраиваем Gradle (чтобы упаковать .so файлы) ---
       - name: Configure build.gradle for jniLibs
         run: |
           GRADLE_FILE="opencv_native/android/build.gradle"
           
-          # Добавляем флаги C++
+          # C++ Flags
           sed -i '/defaultConfig {/a \        externalNativeBuild {\n            cmake {\n                cppFlags "-std=c++11 -frtti -fexceptions"\n                arguments "-DANDROID_STL=c++_shared"\n            }\n        }' $GRADLE_FILE
           
-          # Указываем путь к jniLibs
+          # JNI Libs source set
           echo "
           android {
               sourceSets {
@@ -102,8 +103,6 @@ jobs:
               }
           }
           " >> $GRADLE_FILE
-          
-          cat $GRADLE_FILE
 
       - name: Build example APK
         run: |
@@ -111,11 +110,30 @@ jobs:
           flutter pub get
           flutter build apk --release
 
-      - name: Check APK Size and Libraries
+      - name: Verify OpenCV Linking (Mini Output)
         run: |
           APK_PATH="opencv_native/example/build/app/outputs/flutter-apk/app-release.apk"
-          ls -lh $APK_PATH
-          unzip -l $APK_PATH | grep "libopencv_java4.so" || echo "WARNING: OpenCV lib not found in APK!"
+          
+          mkdir -p apk_content
+          unzip -q $APK_PATH -d apk_content
+          
+          LIB_PATH=$(find apk_content -name "libopencv_native.so" | head -n 1)
+          
+          if [ -z "$LIB_PATH" ]; then
+            echo "::error::File libopencv_native.so NOT found inside APK!"
+            exit 1
+          fi
+          
+          DEPENDENCIES=$(readelf -d $LIB_PATH)
+          echo "$DEPENDENCIES"
+          
+          if echo "$DEPENDENCIES" | grep -q "libopencv_java4.so"; then
+             echo "✅ SUCCESS: Your plugin is successfully linked against OpenCV!"
+             echo "Found dependency: libopencv_java4.so"
+          else
+             echo "❌ FAIL: OpenCV library dependency missing! (Still linking statically?)"
+             exit 1
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
