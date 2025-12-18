@@ -52,11 +52,10 @@ jobs:
               return a + b;
           }
 
-          // Изменили функцию: теперь она создает матрицу.
-          // Это заставляет линковщик подключить библиотеку, так как конструктор cv::Mat находится внутри .so файла.
           extern "C" DART_EXPORT intptr_t get_opencv_version_major() {
-              cv::Mat mat(10, 10, CV_8UC1); // Выделение памяти под картинку 10x10
-              return mat.rows;              // Вернет 10
+              // Реальный вызов конструктора матрицы
+              cv::Mat mat(10, 10, CV_8UC1);
+              return mat.rows;
           }
           EOF
 
@@ -64,36 +63,37 @@ jobs:
         run: |
           CMAKE_FILE="opencv_native/src/CMakeLists.txt"
           
-          # 1. Меняем .c на .cpp и включаем C++
+          # Переключаем язык на C++
           sed -i 's/opencv_native.c/opencv_native.cpp/g' $CMAKE_FILE
           sed -i 's/LANGUAGES C/LANGUAGES CXX/g' $CMAKE_FILE
           
-          # 2. Пишем конфиг, который ИГНОРИРУЕТ статику и берет .so файл
           cat <<EOF >> $CMAKE_FILE
           
           if (ANDROID)
-              # Подключаем хидеры (заголовки), чтобы код компилировался
               set(OpenCV_DIR "$OPENCV_ANDROID_SDK/sdk/native/jni")
               find_package(OpenCV REQUIRED)
               
-              # ВАЖНО: Создаем "импортированную" библиотеку, указывая путь к .so файлу
+              # 1. Include paths (Fixes 'fatal error: core.hpp not found')
+              target_include_directories(opencv_native PRIVATE 
+                  "$OPENCV_ANDROID_SDK/sdk/native/jni/include")
+              
+              # 2. Force Shared Linking (Fixes APK size / static linking issues)
               add_library(libopencv_java4 SHARED IMPORTED)
               set_target_properties(libopencv_java4 PROPERTIES IMPORTED_LOCATION
                   "${OPENCV_ANDROID_SDK}/sdk/native/libs/\${ANDROID_ABI}/libopencv_java4.so")
               
-              # Линкуем наш плагин ИМЕННО с этой динамической библиотекой
               target_link_libraries(opencv_native libopencv_java4)
-              
-              message(STATUS "Forcing link against: ${OPENCV_ANDROID_SDK}/sdk/native/libs/\${ANDROID_ABI}/libopencv_java4.so")
           endif()
           EOF
-          
-          cat $CMAKE_FILE
 
       - name: Configure build.gradle for jniLibs
         run: |
           GRADLE_FILE="opencv_native/android/build.gradle"
+          
+          # C++ Flags
           sed -i '/defaultConfig {/a \        externalNativeBuild {\n            cmake {\n                cppFlags "-std=c++11 -frtti -fexceptions"\n                arguments "-DANDROID_STL=c++_shared"\n            }\n        }' $GRADLE_FILE
+          
+          # JNI Libs source set
           echo "
           android {
               sourceSets {
@@ -110,18 +110,13 @@ jobs:
           flutter pub get
           flutter build apk --release
 
-      # --- НОВЫЙ ШАГ: ПРОВЕРКА ЗАВИСИМОСТЕЙ ---
       - name: Verify OpenCV Linking (Mini Output)
         run: |
           APK_PATH="opencv_native/example/build/app/outputs/flutter-apk/app-release.apk"
           
-          # Создаем временную папку и распаковываем туда APK
           mkdir -p apk_content
           unzip -q $APK_PATH -d apk_content
           
-          echo "Checking dependencies of libopencv_native.so..."
-          
-          # Ищем нашу скомпилированную библиотеку (обычно в lib/arm64-v8a/)
           LIB_PATH=$(find apk_content -name "libopencv_native.so" | head -n 1)
           
           if [ -z "$LIB_PATH" ]; then
@@ -129,17 +124,14 @@ jobs:
             exit 1
           fi
           
-          # readelf -d показывает динамические зависимости
-          # Мы ищем строчку "NEEDED" и "libopencv_java4.so"
           DEPENDENCIES=$(readelf -d $LIB_PATH)
-          
           echo "$DEPENDENCIES"
           
           if echo "$DEPENDENCIES" | grep -q "libopencv_java4.so"; then
              echo "✅ SUCCESS: Your plugin is successfully linked against OpenCV!"
              echo "Found dependency: libopencv_java4.so"
           else
-             echo "❌ FAIL: OpenCV library dependency missing!"
+             echo "❌ FAIL: OpenCV library dependency missing! (Still linking statically?)"
              exit 1
           fi
 
